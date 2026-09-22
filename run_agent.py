@@ -1,52 +1,78 @@
-# Before running the sample:
-#    pip install azure-ai-projects>=2.1.0
+# Copyright (c) Microsoft. All rights reserved.
 
+import asyncio
 import os
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import ResponseStreamEventType
+
+from agent_framework import Agent, AgentResponseUpdate, WorkflowBuilder
+from agent_framework.foundry import FoundryChatClient
+from azure.identity import AzureCliCredential
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+"""
+Sample: Azure AI Agents in a Workflow with Streaming
+
+This sample shows how to create agents backed by Azure OpenAI Responses and use them in a workflow with streaming.
+
+Prerequisites:
+- FOUNDRY_PROJECT_ENDPOINT must be your Microsoft Foundry Agent Service (V2) project endpoint.
+- FOUNDRY_MODEL must be the deployment name of a model in your Foundry project.
+- Authentication via azure-identity. Use AzureCliCredential and run az login before executing the sample.
+- Basic familiarity with WorkflowBuilder, edges, events, and streaming runs.
+"""
 
 
-endpoint = "https://speedlearning.services.ai.azure.com/api/projects/proj-default"
-
-project_client = AIProjectClient(
-    endpoint=endpoint,
-    credential=DefaultAzureCredential(),
-)
-
-with project_client:
-
-    workflow = {
-        "name": "<your-agent-name>",
-        "version": "<your-agent-version>",
-    }
-    
-    openai_client = project_client.get_openai_client()
-
-    conversation = openai_client.conversations.create()
-    print(f"Created conversation (id: {conversation.id})")
-
-    stream = openai_client.responses.create(
-        conversation=conversation.id,
-        extra_body={"agent_reference": {"name": workflow["name"], "type": "agent_reference"}},
-        input="Hello Agent",
-        stream=True,
-        metadata={"x-ms-debug-mode-enabled": "1"},
+async def main() -> None:
+    client = FoundryChatClient(
+        project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
+        model=os.environ["FOUNDRY_MODEL"],
+        credential=AzureCliCredential(),
     )
 
-    for event in stream:
-        if event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DONE:
-            print("\t", event.text)
-        elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_ADDED and event.item.type == "workflow_action":
-            print(f"********************************\nActor - '{event.item.action_id}' :")
-        elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_ADDED and event.item.type == "workflow_action":
-            print(f"Workflow Item '{event.item.action_id}' is '{event.item.status}' - (previous item was : '{event.item.previous_action_id}')")
-        elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_DONE and event.item.type == "workflow_action":
-            print(f"Workflow Item '{event.item.action_id}' is '{event.item.status}' - (previous item was: '{event.item.previous_action_id}')")
-        elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DELTA:
-            print(event.delta)
-        else:
-            print(f"Unknown event: {event}")
 
-    openai_client.conversations.delete(conversation_id=conversation.id)
-    print("Conversation deleted")
+    # Create two agents: a Writer and a Reviewer.
+    writer_agent = Agent(
+        client=client,
+        name="Writer",
+        instructions=(
+            "You are an excellent content writer. You create new content and edit contents based on the feedback."
+        ),
+    )
+
+    reviewer_agent = Agent(
+        client=client,
+        name="Reviewer",
+        instructions=(
+            "You are an excellent content reviewer. "
+            "Provide actionable feedback to the writer about the provided content. "
+            "Provide the feedback in the most concise manner possible."
+        ),
+    )
+
+    # Build the workflow by adding agents directly as edges.
+    # Agents adapt to workflow mode: run(stream=True) for incremental updates, run() for complete responses.
+    workflow = WorkflowBuilder(start_executor=writer_agent).add_edge(writer_agent, reviewer_agent).build()
+
+    # Track the last author to format streaming output.
+    last_author: str | None = None
+
+    events = workflow.run("Create a slogan for a new electric SUV that is affordable and fun to drive.", stream=True)
+    async for event in events:
+        # The outputs of the workflow are whatever the agents produce. So the events are expected to
+        # contain `AgentResponseUpdate` from the agents in the workflow.
+        if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
+            update = event.data
+            author = update.author_name
+            if author != last_author:
+                if last_author is not None:
+                    print()  # Newline between different authors
+                print(f"{author}: {update.text}", end="", flush=True)
+                last_author = author
+            else:
+                print(update.text, end="", flush=True)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
