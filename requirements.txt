@@ -1,3 +1,16 @@
+# --- Azure AI Foundry sample (original) ---
 ansible-core==2.19.7
 azure-ai-projects==2.1.0
 azure-identity==1.25.0
+
+# --- PURSUE R01 Extraction Probe ---
+# Microsoft Agent Framework — workflow orchestration + human-in-the-loop.
+agent-framework>=1.19.0
+# Azure Document Intelligence (OCR) + Blob storage for raw/processed artifacts.
+azure-ai-documentintelligence>=1.0.0
+azure-storage-blob>=12.19.0
+# PDF page counting / rasterisation for OCR and text-layer detection.
+pymupdf>=1.24.0
+# Local (no-Azure-cost) OCR fallback engine.
+pytesseract>=0.3.10
+Pillow>=10.0.0
